@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "labelled-parquet"
-version = "0.1.0"
+version = "1.0.0"
 description = "Read and write Parquet files with Stata-compatible labelled metadata"
 readme = "README.md"
 requires-python = ">=3.11"
