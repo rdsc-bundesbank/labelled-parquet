@@ -1,0 +1,120 @@
+name: CI and publish Python package
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  conventional-commit:
+    name: Validate pull-request title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked --group dev
+      - name: Validate title as a Conventional Commit
+        run: uv run cz check --message "${{ github.event.pull_request.title }}"
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+        dependency-resolution: [locked]
+        include:
+          - python-version: "3.11"
+            dependency-resolution: lowest-direct
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install locked dependencies
+        if: matrix.dependency-resolution == 'locked'
+        run: uv sync --locked --all-extras --group dev
+      - name: Install minimum direct dependencies
+        if: matrix.dependency-resolution == 'lowest-direct'
+        run: uv sync --upgrade --resolution lowest-direct --all-extras --group dev
+      - run: uv run ruff check src tests
+      - run: uv run pyrefly check
+      - run: uv run pytest
+
+  release-build:
+    name: Build release distributions
+    if: github.event_name == 'release'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Build the exact revision selected by the published GitHub Release.
+          ref: ${{ github.event.release.tag_name }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv build
+      - name: Verify release tag and distribution version agree
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          expected_version="${RELEASE_TAG#v}"
+          python - "$expected_version" <<'PY'
+          import sys
+          import zipfile
+          from email.parser import BytesParser
+          from pathlib import Path
+
+          expected_version = sys.argv[1]
+          wheel = next(Path("dist").glob("*.whl"))
+          with zipfile.ZipFile(wheel) as archive:
+              metadata_path = next(
+                  path for path in archive.namelist() if path.endswith(".dist-info/METADATA")
+              )
+              metadata = BytesParser().parsebytes(archive.read(metadata_path))
+
+          if metadata["Name"] != "labelled-parquet":
+              raise SystemExit(f"Unexpected distribution name: {metadata['Name']}")
+          if metadata["Version"] != expected_version:
+              raise SystemExit(
+                  f"Release tag {expected_version!r} does not match "
+                  f"distribution version {metadata['Version']!r}"
+              )
+          PY
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+
+  pypi-publish:
+    name: Publish to PyPI
+    if: github.event_name == 'release'
+    needs: release-build
+    runs-on: ubuntu-latest
+    permissions:
+      # Required for PyPI trusted publishing.
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/project/labelled-parquet/
+    steps:
+      - name: Retrieve release distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+      - name: Publish release distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
