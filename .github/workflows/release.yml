@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
@@ -37,7 +38,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-contents: write
 
@@ -47,7 +48,18 @@ jobs:
           git config user.email "${{ steps.app-token.outputs.app-id }}+${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com"
 
       - name: Bump version and create an annotated tag
-        run: uv run cz bump --yes --changelog --annotated-tag
+        run: uv run cz bump --yes --changelog --version-files-only
+      
+      - name: Update the lockfile
+        run: uv lock
+      
+      - name: Commit the release and create an annotated tag
+        shell: bash
+        run: |
+          version="$(uv run cz version --project)"
+          git add pyproject.toml uv.lock CHANGELOG.md
+          git commit -m "bump: version ${version}"
+          git tag --annotate "v${version}" --message "v${version}"
 
       - name: Push the release commit and tag
         env:
@@ -62,6 +74,5 @@ jobs:
         run: |
           version="$(uv run cz version --project)"
           gh release create "v${version}" \
-            --target "v${version}" \
             --title "v${version}" \
             --generate-notes

@@ -96,7 +96,7 @@ jobs:
           PY
       - name: Attach distributions to the GitHub Release
         env:
-          GH_Token: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$RELEASE_TAG" dist/*
       - name: Upload distributions
